@@ -1,7 +1,13 @@
 import DeviceActivity
+import Foundation
 
 class TimerActivityUtil {
+  // Serializes callbacks so one schedule ending can't clear the session the next one started
+  private static let lock = NSLock()
+
   static func startTimerActivity(for activity: DeviceActivityName) {
+    lock.lock()
+    defer { lock.unlock() }
     let parts = getTimerParts(from: activity)
 
     guard let timerActivity = getTimerActivity(for: parts.deviceActivityId),
@@ -16,6 +22,8 @@ class TimerActivityUtil {
   }
 
   static func stopTimerActivity(for activity: DeviceActivityName) {
+    lock.lock()
+    defer { lock.unlock() }
     let parts = getTimerParts(from: activity)
 
     guard let timerActivity = getTimerActivity(for: parts.deviceActivityId),
