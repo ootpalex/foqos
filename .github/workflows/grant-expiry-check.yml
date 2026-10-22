@@ -1,0 +1,69 @@
+name: Grant expiry check
+
+# Runs the Temporary Access expiry test on clean runners, with the proposed
+# one-second tolerance (fix: on) and without it (fix: off).
+on:
+  push:
+    branches:
+      - fix-grant-expiry-verify2
+  workflow_dispatch:
+
+jobs:
+  expiry:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        fix: [on, off]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 4
+
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+
+      - name: Remove the fix
+        if: matrix.fix == 'off'
+        run: git checkout HEAD~2 -- Foqos/Models/Timers/SoftUnblockGrantTimerActivity.swift && git diff --stat HEAD
+
+      - name: Lint
+        if: matrix.fix == 'on'
+        run: |
+          brew install swift-format
+          make lint
+
+      - name: Run the expiry test 20 times
+        run: |
+          set -o pipefail
+          xcodebuild test -project foqos.xcodeproj -scheme foqos \
+            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+            -only-testing:foqosTests/SoftUnblockTests/testGrantExpiresWhenIntervalEndsJustBeforeExpiry \
+            -test-iterations 20 -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee expiry.log
+        continue-on-error: true
+
+      - name: Run the full unit test suite
+        if: matrix.fix == 'on'
+        run: |
+          set -o pipefail
+          xcodebuild test -project foqos.xcodeproj -scheme foqos \
+            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+            -only-testing:foqosTests -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee suite.log
+        continue-on-error: true
+
+      - name: make build, make test, make mac-test
+        if: matrix.fix == 'on'
+        run: make build && make test && make mac-test
+        continue-on-error: true
+
+      - name: Summarize
+        run: |
+          echo "fix=${{ matrix.fix }}"
+          echo "expiry test passed: $(grep -c "testGrantExpiresWhenIntervalEndsJustBeforeExpiry\]' passed" expiry.log)"
+          echo "expiry test failed: $(grep -c "testGrantExpiresWhenIntervalEndsJustBeforeExpiry\]' failed" expiry.log)"
+          [ -f suite.log ] && grep -E "Executed [0-9]+ tests|\*\* TEST" suite.log | tail -3 || true
