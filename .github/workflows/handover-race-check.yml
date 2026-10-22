@@ -1,0 +1,63 @@
+name: Handover race check
+
+# Runs the schedule-handover tests for issue #603 on clean runners,
+# with the proposed TimerActivityUtil lock (lock: on) and without it (lock: off).
+on:
+  push:
+    branches:
+      - handover-race-check
+  workflow_dispatch:
+
+jobs:
+  handover:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        lock: [on, off]
+        run: [1, 2, 3]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+
+      - name: Remove the lock
+        if: matrix.lock == 'off'
+        run: git checkout HEAD~1 -- Foqos/Models/Timers/TimerActivityUtil.swift && git diff --stat HEAD
+
+      - name: Lint the changed files, then the repository without the stress tests
+        if: matrix.lock == 'on' && matrix.run == 1
+        run: |
+          brew install swift-format
+          swift-format lint Foqos/Models/Timers/TimerActivityUtil.swift foqosTests/ScheduleHandoverTests.swift
+          mv foqosTests/HandoverRaceTests.swift /tmp/
+          make lint
+          mv /tmp/HandoverRaceTests.swift foqosTests/
+
+      - name: Run the full unit test suite
+        run: |
+          set -o pipefail
+          xcodebuild test -project foqos.xcodeproj -scheme foqos \
+            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+            -only-testing:foqosTests -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES -maximum-test-execution-time-allowance 300 \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee test.log
+        continue-on-error: true
+
+      - name: Summarize
+        run: |
+          echo "lock=${{ matrix.lock }} run=${{ matrix.run }}"
+          grep -E "RACE|STALLED|exceeded execution time|Executed [0-9]+ tests|Test Case .* failed" test.log || true
+          echo "load: $(uptime)"
+
+      - name: Upload log
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-lock-${{ matrix.lock }}-run-${{ matrix.run }}
+          path: test.log
