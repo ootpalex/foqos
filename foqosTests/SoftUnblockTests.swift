@@ -1,4 +1,6 @@
 import DeviceActivity
+import FamilyControls
+import ManagedSettings
 import XCTest
 
 @testable import foqos
@@ -229,6 +231,57 @@ final class SoftUnblockTests: XCTestCase {
     )
 
     XCTAssertNil(SoftUnblockGrantScheduler.identifiers(from: activityName))
+  }
+
+  func testGrantExpiresWhenIntervalEndsJustBeforeExpiry() throws {
+    SoftUnblockGrantStore.clearAll()
+    defer { SoftUnblockGrantStore.clearAll() }
+
+    let profile = makeProfileSnapshot()
+    let sessionId = UUID().uuidString
+    SoftUnblockGrantStore.beginSession(
+      sessionId: sessionId,
+      profileId: profile.id,
+      maximumUnblockCount: 4,
+      allowanceResetIntervalInHours: nil,
+      startedAt: Date().addingTimeInterval(-60 * 60)
+    )
+    let token = try JSONDecoder().decode(
+      ApplicationToken.self, from: Data(#"{"data":"AAECAwQFBgcICQ=="}"#.utf8))
+    let activity = SoftUnblockGrantTimerActivity()
+
+    // On device, intervalDidEnd arrived at 10:44:54.135 for a grant expiring at about 10:44:54.5
+    let expiresAt = Date().addingTimeInterval(0.5)
+    let grant = SoftUnblockGrant(
+      id: UUID(),
+      sessionId: sessionId,
+      profileId: profile.id,
+      resource: .application(token),
+      createdAt: expiresAt.addingTimeInterval(-15 * 60),
+      expiresAt: expiresAt
+    )
+    XCTAssertTrue(SoftUnblockGrantStore.issue(grant))
+
+    activity.stop(
+      for: profile,
+      activityName: DeviceActivityName(
+        rawValue:
+          "\(SoftUnblockGrantScheduler.activityId):\(profile.id.uuidString)|\(sessionId)|\(grant.id.uuidString)"
+      )
+    )
+
+    XCTAssertNil(SoftUnblockGrantStore.grant(id: grant.id, sessionId: sessionId))
+  }
+
+  private func makeProfileSnapshot() -> SharedData.ProfileSnapshot {
+    SharedData.ProfileSnapshot(
+      id: UUID(), name: "Profile", selectedActivity: FamilyActivitySelection(),
+      createdAt: Date(), updatedAt: Date(),
+      blockingStrategyId: SoftUnblockSessionLifecycleHandler.nfcStrategyId,
+      strategyData: nil, order: 0, enableLiveActivity: false, reminderTimeInSeconds: nil,
+      customReminderMessage: nil, enableBreaks: false, enableStrictMode: false,
+      enableAllowMode: false, enableAllowModeDomains: false, enableSafariBlocking: false,
+      domains: nil)
   }
 
   private func makeSession(
