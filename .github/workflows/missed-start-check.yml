@@ -1,0 +1,54 @@
+name: Missed start check
+
+on:
+  push:
+    branches:
+      - schedule-missed-start-verify
+
+jobs:
+  check:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        fix: [on]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 3
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+      - name: Remove the take-over
+        if: matrix.fix == 'off'
+        run: git checkout HEAD~2 -- Foqos/Models/Timers/ScheduleTimerActivity.swift && git diff --stat HEAD
+      - name: Run the new tests 10 times
+        run: |
+          set -o pipefail
+          xcodebuild test -project foqos.xcodeproj -scheme foqos \
+            -destination 'platform=iOS Simulator,name=iPhone 17,OS=latest' \
+            -only-testing:foqosTests/FoqosControlTests/testMissedScheduleBeganDuringTheSession \
+            -only-testing:foqosTests/FoqosControlTests/testScheduleThatWasReplacedIsNotMissed \
+            -only-testing:foqosTests/FoqosControlTests/testOvernightScheduleBelongsToItsStartDay \
+            -test-iterations 10 -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee new.log
+        continue-on-error: true
+      - name: make lint, build, test, mac-test
+        if: matrix.fix == 'on'
+        run: |
+          brew install swift-format
+          set -o pipefail
+          (make lint && make build && make test && make mac-test) 2>&1 | tee suite.log
+        continue-on-error: true
+      - name: Summarize
+        run: |
+          echo "fix=${{ matrix.fix }}"
+          for t in testMissedScheduleBeganDuringTheSession testScheduleThatWasReplacedIsNotMissed testOvernightScheduleBelongsToItsStartDay; do
+            echo "$t passed=$(grep -c "$t\]' passed\|$t()' passed" new.log) failed=$(grep -c "$t\]' failed\|$t()' failed" new.log)"
+          done
+          ran=$(grep -cE "' (passed|failed)" new.log)
+          [ "$ran" -gt 0 ] || { echo "new tests did not run"; exit 1; }
+          if [ "${{ matrix.fix }}" = on ]; then
+            grep -E "Executed [0-9]+ tests|\*\* (BUILD|TEST) (SUCCEEDED|FAILED)|warning: .*(Schedule|FoqosControlTests)" suite.log | tail -8
+            [ "$(grep -c 'TEST SUCCEEDED' suite.log)" -ge 2 ] || { echo "suite did not succeed"; exit 1; }
+          fi
