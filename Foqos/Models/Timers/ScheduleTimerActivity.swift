@@ -8,7 +8,7 @@ class ScheduleTimerActivity: TimerActivity {
   static var id: String = "ScheduleTimerActivity"
 
   // Device Activity callbacks can overlap on different handler instances.
-  private static let transitionLock = NSLock()
+  private static let transitionLock = NSRecursiveLock()
 
   private let appBlocker = AppBlockerUtil()
 
@@ -114,6 +114,27 @@ class ScheduleTimerActivity: TimerActivity {
 
     // End the active scheduled session
     SharedData.endActiveSharedSession()
+
+    // iOS can miss a start callback, so start a schedule that began during this session
+    if let missedProfile = getMissedScheduleProfile(
+      for: activeSession, from: DeviceActivityCenter().activities)
+    {
+      log.info(
+        "Stop schedule timer activity for \(profileId), starting missed schedule for \(missedProfile.id.uuidString)"
+      )
+      start(for: missedProfile)
+    }
+  }
+
+  func getMissedScheduleProfile(
+    for session: SharedData.SessionSnapshot, from activities: [DeviceActivityName]
+  ) -> SharedData.ProfileSnapshot? {
+    // A schedule that began during the session should have taken over, so its start was missed
+    return SharedData.profileSnapshots.values.first(where: {
+      guard let startDate = $0.schedule?.currentStartDate() else { return false }
+      return startDate > session.startTime
+        && activities.contains(getDeviceActivityName(from: $0.id.uuidString))
+    })
   }
 
   func getScheduleInterval(from schedule: BlockedProfileSchedule) -> (

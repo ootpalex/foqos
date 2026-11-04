@@ -78,6 +78,32 @@ struct BlockedProfileSchedule: Codable, Equatable {
     return now.timeIntervalSince(updatedAt) > 15 * 60
   }
 
+  func currentStartDate(now: Date = Date(), calendar: Calendar = .current) -> Date? {
+    guard isActive else { return nil }
+
+    for daysAgo in 0...1 {
+      guard let day = calendar.date(byAdding: .day, value: -daysAgo, to: now),
+        isTodayScheduled(now: day, calendar: calendar),
+        let startTime = calendar.date(
+          bySettingHour: startHour, minute: startMinute, second: 0, of: day),
+        var endTime = calendar.date(bySettingHour: endHour, minute: endMinute, second: 0, of: day)
+      else {
+        continue
+      }
+
+      // Overnight schedules end the next day
+      if endTime <= startTime {
+        endTime = calendar.date(byAdding: .day, value: 1, to: endTime) ?? endTime
+      }
+
+      if startTime <= now && now < endTime {
+        return startTime
+      }
+    }
+
+    return nil
+  }
+
   func nextStartDate(
     now: Date = Date(),
     calendar: Calendar = .current,

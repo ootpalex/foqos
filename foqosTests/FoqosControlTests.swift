@@ -118,6 +118,56 @@ final class FoqosControlTests: ModelRegressionTestCase {
     XCTAssertNil(manager.activeSession)
   }
 
+  func testMissedScheduleBeganDuringTheSession() throws {
+    let missed = try makeProfile(name: "Home")
+    // Its schedule starts this minute, as when one schedule ends where the next begins
+    missed.schedule = makeSchedule(startingMinutesFromNow: 0)
+    let snapshot = BlockedProfiles.getSnapshot(for: missed)
+    SharedData.setSnapshot(snapshot, for: missed.id.uuidString)
+    let activity = ScheduleTimerActivity()
+    var session = SharedData.createSessionForSchedular(for: UUID())
+    session.startTime = Date().addingTimeInterval(-60 * 60)
+
+    XCTAssertEqual(
+      activity.getMissedScheduleProfile(
+        for: session, from: [activity.getDeviceActivityName(from: missed.id.uuidString)]),
+      snapshot)
+    XCTAssertNil(activity.getMissedScheduleProfile(for: session, from: []))
+  }
+
+  func testScheduleThatWasReplacedIsNotMissed() throws {
+    let replaced = try makeProfile(name: "Home")
+    replaced.schedule = makeSchedule(startingMinutesFromNow: -60)
+    SharedData.setSnapshot(
+      BlockedProfiles.getSnapshot(for: replaced), for: replaced.id.uuidString)
+    let activity = ScheduleTimerActivity()
+    let session = SharedData.createSessionForSchedular(for: UUID())
+
+    XCTAssertNil(
+      activity.getMissedScheduleProfile(
+        for: session, from: [activity.getDeviceActivityName(from: replaced.id.uuidString)]))
+  }
+
+  func testOvernightScheduleBelongsToItsStartDay() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "UTC")!
+    // referenceDate is a Tuesday at 22:13 UTC.
+    let schedule = BlockedProfileSchedule(
+      days: [.tuesday], startHour: 22, startMinute: 0, endHour: 7, endMinute: 35)
+    let tuesdayStart = referenceDate.addingTimeInterval(-(13 * 60 + 20))
+
+    XCTAssertEqual(schedule.currentStartDate(now: referenceDate, calendar: calendar), tuesdayStart)
+    XCTAssertEqual(
+      schedule.currentStartDate(
+        now: referenceDate.addingTimeInterval(9 * 60 * 60), calendar: calendar), tuesdayStart)
+    XCTAssertNil(
+      schedule.currentStartDate(
+        now: referenceDate.addingTimeInterval(10 * 60 * 60), calendar: calendar))
+    XCTAssertNil(
+      schedule.currentStartDate(
+        now: referenceDate.addingTimeInterval(-15 * 60 * 60), calendar: calendar))
+  }
+
   func testBreakControlStartsAndEndsWithoutEndingTheProfile() throws {
     let session = try makeSession()
     var scheduleCount = 0
@@ -202,6 +252,16 @@ final class FoqosControlTests: ModelRegressionTestCase {
     context.insert(profile)
     try context.save()
     return profile
+  }
+
+  private func makeSchedule(startingMinutesFromNow offset: Int) -> BlockedProfileSchedule {
+    let start = Calendar.current.dateComponents(
+      [.hour, .minute], from: Date().addingTimeInterval(TimeInterval(offset * 60)))
+    var schedule = BlockedProfileSchedule(
+      days: Weekday.allCases, startHour: start.hour!, startMinute: start.minute!,
+      endHour: (start.hour! + 2) % 24, endMinute: start.minute!)
+    schedule.updatedAt = Date().addingTimeInterval(-60 * 60)
+    return schedule
   }
 
   private func makeSession() throws -> BlockedProfileSession {
